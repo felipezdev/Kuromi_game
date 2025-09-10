@@ -48,6 +48,8 @@ class Menu:
         
         self.items = [
             MenuItem("Jogar", font, lambda: self.game.start_game()),
+            MenuItem("Modos de Jogo", font, lambda: self.game.show_modes()),
+            MenuItem("Objetivos Diários", font, lambda: self.game.show_objectives()),
             MenuItem("Personagens", font, lambda: self.game.show_characters()),
             MenuItem("Instruções", font, lambda: self.game.show_instructions()),
             MenuItem("High Scores", font, lambda: self.game.show_highscores()),

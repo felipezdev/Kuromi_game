@@ -4,11 +4,21 @@ Classe principal do jogo Kuromi Catch
 import pygame
 import sys
 import random
-from .constants import *
+import math
+from .constants import (
+    WIDTH, HEIGHT, FPS, TITLE, START_LIVES, LEVEL_SPEED_INCREASE,
+    LEVEL_SCORE_MULTIPLIER, COMBO_MULTIPLIER, BLACK, WHITE, GOLD, 
+    PINK, PURPLE, DARK_PURPLE, GAME_MODES, MIN_SPAWN_MS, START_SPAWN_MS, 
+    SPAWN_DECREASE_AMOUNT, POINTS_PER_LEVEL, MAX_LEVEL, POWERUP_MIN_INTERVAL,
+    POWERUP_CHANCE
+)
 from .sprites import Player, Item, PowerUp
 from .effects import ParticleSystem
 from .managers import ResourceManager, ScoreManager, AchievementManager
+from .ui.modes_menu import ModesMenu
 from .ui import Menu, PauseMenu, HUD
+from .modes import GameModeManager, DailyObjectivesManager
+from .visual_effects import VisualEffectsManager
 
 class Game:
     def __init__(self):
@@ -18,7 +28,7 @@ class Game:
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
         
-        self.state = STATE_MENU
+        self.state = 'menu'
         self.running = True
         self.paused = False
         
@@ -28,10 +38,14 @@ class Game:
         self.score_manager.game = self  # Define a referência ao jogo
         self.achievement_manager = AchievementManager()
         self.particle_system = ParticleSystem(self)
+        self.game_mode_manager = GameModeManager(self)
+        self.daily_objectives_manager = DailyObjectivesManager(self)
+        self.visual_effects_manager = VisualEffectsManager(self)
         
         # UI
         self.menu = Menu(self)
         self.pause_menu = PauseMenu(self)
+        self.modes_menu = ModesMenu(self)
         self.hud = HUD(self)
         
         # Game objects
@@ -50,8 +64,9 @@ class Game:
         self.resource_manager.play_music()
         
     def start_game(self):
-        self.state = STATE_GAME
+        self.state = 'game'
         self.player = Player(self)
+        self.start_time = pygame.time.get_ticks()  # Registra o tempo inicial
         self.reset_game_state()
         
     def reset_game_state(self):
@@ -59,16 +74,24 @@ class Game:
         self.score_manager.reset()
         self.game_time = 0
         self.spawn_timer = 0
+        self.start_time = pygame.time.get_ticks()  # Atualiza o tempo inicial
         self.last_spawn = pygame.time.get_ticks()
         self.items.empty()
         self.powerups.empty()
         
+        # Reset dos modificadores de modo
+        self.speed_multiplier = 1.0
+        self.spawn_multiplier = 1.0
+        self.score_multiplier = 1.0
+        self.spawn_bad_items = True
+        self.required_accuracy = 0.0
+        
     def update(self):
-        if self.state == STATE_MENU:
+        if self.state == 'menu':
             self.menu.update()
-        elif self.state == STATE_PAUSE:
+        elif self.state == 'pause':
             self.pause_menu.update()
-        elif self.state == STATE_GAME and not self.paused:
+        elif self.state == 'game' and not self.paused:
             self.update_game()
             
         # Atualiza partículas em todos os estados
@@ -77,17 +100,31 @@ class Game:
     def update_game(self):
         # Atualiza tempo de jogo
         self.game_time = pygame.time.get_ticks()
+        elapsed_time = self.game_time - self.start_time
+        
+        # Atualiza objetivo de sobrevivência
+        self.daily_objectives_manager.update_progress('survive_time', elapsed_time // 1000)
         
         # Verifica game over
         if self.player.lives <= 0:
-            self.state = STATE_GAMEOVER
+            self.state = 'gameover'
             self.score_manager.check_highscore()
             return
         
+        # Atualiza modo de jogo
+        self.game_mode_manager.update()
+        
         # Spawna itens
         current_time = pygame.time.get_ticks()
-        spawn_delay = max(MIN_SPAWN_MS, 
-                         START_SPAWN_MS - (self.level * SPAWN_DECREASE_AMOUNT))
+        base_delay = max(MIN_SPAWN_MS, 
+                        START_SPAWN_MS - (self.level * SPAWN_DECREASE_AMOUNT))
+        
+        # Aplica modificador do modo de jogo
+        mode = GAME_MODES.get(self.game_mode_manager.current_mode)
+        if mode:
+            spawn_delay = base_delay / mode.get('spawn_mult', 1.0)
+        else:
+            spawn_delay = base_delay
                          
         if current_time - self.last_spawn > spawn_delay:
             self.spawn_item()
@@ -97,6 +134,9 @@ class Game:
         self.player.update()
         self.items.update()
         self.powerups.update()
+        
+        # Atualiza efeitos visuais
+        self.visual_effects_manager.update()
         
         # Checa colisões
         self.check_collisions()
@@ -117,22 +157,51 @@ class Game:
                 self.handle_powerup_collision(powerup)
                 
     def handle_item_collision(self, item):
-        points = 10 if item.is_good else -10  # Points for good and bad items
-        points *= self.level * LEVEL_SCORE_MULTIPLIER
+        base_points = 10 if item.is_good else -10
+        points = base_points * self.level * LEVEL_SCORE_MULTIPLIER
         points *= (1 + self.score_manager.combo * COMBO_MULTIPLIER)
+        
+        # Aplica multiplicador do modo de jogo
+        points *= self.score_multiplier
         
         if item.is_good:
             self.score_manager.add_combo()
             self.particle_system.emit_particles('sparkle', item.rect.center)
             self.resource_manager.play_sound('catch')
+            
+            # Atualiza objetivos diários
+            self.daily_objectives_manager.update_progress('catch_items', 
+                self.score_manager.items_collected + 1)
+            self.daily_objectives_manager.update_progress('reach_combo', 
+                self.score_manager.combo)
+            
+            # Efeitos visuais baseados no combo
+            color = GOLD if self.score_manager.combo >= 10 else WHITE
+            self.visual_effects_manager.add_score_popup(
+                item.rect.centerx, item.rect.centery,
+                int(points), color
+            )
+            
+            # Checa perfect catch
+            if self.score_manager.perfect_streak >= 5:
+                self.visual_effects_manager.show_perfect_flash()
+                
         else:
             self.score_manager.reset_combo()
             self.player.take_damage()
             self.particle_system.emit_particles('explosion', item.rect.center)
             self.resource_manager.play_sound('fail')
             
-        self.score_manager.add_score(points)
+        self.score_manager.add_score(int(points))
         item.kill()
+        
+        # Atualiza objetivos baseados em pontuação
+        self.daily_objectives_manager.update_progress('score_points', 
+            self.score_manager.current_score)
+        
+        # Atualiza contadores do modo de jogo
+        if self.game_mode_manager.current_mode != 'normal':
+            self.game_mode_manager.items_caught += 1
         
     def handle_powerup_collision(self, powerup):
         powerup.apply(self.player)
@@ -147,46 +216,70 @@ class Game:
             self.particle_system.emit_particles('levelup', self.player.rect.center)
             
     def spawn_item(self):
-        item = Item(self)
-        self.items.add(item)
-        if (pygame.time.get_ticks() - self.last_powerup_time > POWERUP_MIN_INTERVAL and 
-            random.random() < POWERUP_CHANCE):
-            powerup = PowerUp(self)
-            self.powerups.add(powerup)
-            self.last_powerup_time = pygame.time.get_ticks()
+        if random.random() < self.spawn_multiplier:  # Considera o multiplicador de spawn
+            item = Item(self)
+            if not self.spawn_bad_items:  # No modo Chuva de Doces, força itens bons
+                item.is_good = True
+            self.items.add(item)
+            self.game_mode_manager.items_spawned += 1
+            
+            if (pygame.time.get_ticks() - self.last_powerup_time > POWERUP_MIN_INTERVAL and 
+                random.random() < POWERUP_CHANCE):
+                powerup = PowerUp(self)
+                self.powerups.add(powerup)
+                self.last_powerup_time = pygame.time.get_ticks()
             
     def draw(self):
         self.screen.fill(BLACK)
         
         # Atualiza e desenha o background com transição
-        if self.state == STATE_GAME or self.state == STATE_PAUSE:
+        if self.state == 'game' or self.state == 'pause':
             self.resource_manager.update_background(self.level)
         self.resource_manager.draw_background(self.screen)
             
-        if self.state == STATE_MENU:
+        if self.state == 'menu':
             self.menu.draw(self.screen)
-        elif self.state == STATE_GAME or self.state == STATE_PAUSE:
+        elif self.state == 'game' or self.state == 'pause':
             self.draw_game()
-            if self.state == STATE_PAUSE:
+            if self.state == 'pause':
                 self.pause_menu.draw(self.screen)
-        elif self.state == STATE_INSTRUCTIONS:
+        elif self.state == 'instructions':
             self.draw_instructions()
-        elif self.state == STATE_HIGHSCORE:
+        elif self.state == 'highscore':
             self.draw_highscores()
-        elif self.state == STATE_GAMEOVER:
+        elif self.state == 'gameover':
             self.draw_game_over()
-        elif self.state == STATE_CHARACTERS:
+        elif self.state == 'characters':
             self.draw_characters()
+        elif self.state == 'modes':
+            self.modes_menu.draw(self.screen)
+            self.modes_menu.update()
+        elif self.state == 'objectives':
+            self.daily_objectives_manager.draw(self.screen)
         
         # Desenha partículas em todos os estados
         self.particle_system.draw(self.screen)
         pygame.display.flip()
         
     def draw_game(self):
+        # Desenha objetos do jogo
         self.items.draw(self.screen)
         self.powerups.draw(self.screen)
         self.player.draw(self.screen)
+        
+            # Desenha HUD básico
         self.hud.draw(self.screen)
+        
+        # Desenha efeitos visuais aprimorados
+        self.visual_effects_manager.draw(self.screen)
+        
+        # Desenha indicador de modo de jogo
+        if self.game_mode_manager.current_mode != 'normal':
+            mode = GAME_MODES[self.game_mode_manager.current_mode]
+            mode_text = mode['name']
+            text_surf = self.resource_manager.fonts[32].render(mode_text, True, GOLD)
+            rect = text_surf.get_rect(centerx=WIDTH//2, top=10)
+            self.screen.blit(text_surf, rect)
         
     def draw_instructions(self):
         # Cria superfície semi-transparente
@@ -288,7 +381,7 @@ class Game:
             x = (WIDTH - text.get_width()) // 2
             self.screen.blit(text, (x, y))
             y += 40
-        
+            
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -296,25 +389,43 @@ class Game:
                 
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    if self.state == STATE_GAME:
-                        self.state = STATE_PAUSE  # Mostra o menu de pausa
+                    if self.state == 'game':
+                        self.state = 'pause'  # Mostra o menu de pausa
                         self.paused = True
-                    elif self.state in [STATE_INSTRUCTIONS, STATE_HIGHSCORE, STATE_CHARACTERS, STATE_GAMEOVER]:
-                        self.state = STATE_MENU
+                    elif self.state in ['instructions', 'highscore', 'characters', 'gameover', 'modes', 'objectives']:
+                        self.state = 'menu'
                         
-                if event.key == pygame.K_r and self.state == STATE_GAMEOVER:
+                if event.key == pygame.K_r and self.state == 'gameover':
                     self.start_game()
                     
             # Verifica fim da música
             self.resource_manager.check_music_end(event)
                 
-            if self.state == STATE_MENU:
+            if self.state == 'menu':
                 self.menu.handle_event(event)
-            elif self.state == STATE_PAUSE:
+            elif self.state == 'pause':
                 self.pause_menu.handle_event(event)
+            elif self.state == 'modes':
+                self.modes_menu.handle_event(event)
+            elif self.state == 'characters' and event.type == pygame.MOUSEBUTTONDOWN:
+                # Posições dos personagens
+                y = 150
+                kuromi_rect = self.resource_manager.images['player'].get_rect(center=(WIDTH // 4, y + 120))
+                melody_rect = self.resource_manager.images['player2'].get_rect(center=(WIDTH * 3 // 4, y + 120))
+                
+                # Checa se clicou em algum personagem
+                mouse_pos = pygame.mouse.get_pos()
+                if kuromi_rect.collidepoint(mouse_pos):
+                    self.resource_manager.selected_character = 'player'
+                    self.resource_manager.play_sound('catch')
+                elif melody_rect.collidepoint(mouse_pos):
+                    char_data = self.resource_manager.unlockable_characters['player2']
+                    if char_data['unlocked'] or self.score_manager.highest_score >= char_data['score']:
+                        self.resource_manager.selected_character = 'player2'
+                        self.resource_manager.play_sound('catch')
                         
         # Processa movimento contínuo do jogador
-        if self.state == STATE_GAME and not self.paused:
+        if self.state == 'game' and not self.paused:
             keys = pygame.key.get_pressed()
             dx = 0
             if keys[pygame.K_LEFT] or keys[pygame.K_a]:
@@ -326,26 +437,32 @@ class Game:
                         
     def toggle_pause(self):
         if not self.paused:
-            self.state = STATE_PAUSE
+            self.state = 'pause'
             self.paused = True
             
     def unpause(self):
         self.paused = False
-        self.state = STATE_GAME
+        self.state = 'game'
         
     def return_to_menu(self):
-        self.state = STATE_MENU
+        self.state = 'menu'
         self.paused = False
         self.reset_game_state()
         
     def show_instructions(self):
-        self.state = STATE_INSTRUCTIONS
+        self.state = 'instructions'
         
     def show_highscores(self):
-        self.state = STATE_HIGHSCORE
+        self.state = 'highscore'
         
     def show_characters(self):
-        self.state = STATE_CHARACTERS
+        self.state = 'characters'
+        
+    def show_modes(self):
+        self.state = 'modes'
+        
+    def show_objectives(self):
+        self.state = 'objectives'
         
     def quit_game(self):
         self.running = False
@@ -365,23 +482,43 @@ class Game:
         
         # Lista de personagens
         y = 150
-        x = WIDTH // 4
         
         # Personagem padrão
+        x = WIDTH // 4
         char_text = "Kuromi"
         text_surf = self.resource_manager.fonts[32].render(char_text, True, WHITE)
         text_x = x - text_surf.get_width() // 2
         self.screen.blit(text_surf, (text_x, y))
         
-        # Status do personagem (Selecionado)
-        status_text = "Selecionado"
-        status_surf = self.resource_manager.fonts[24].render(status_text, True, GOLD)
+        # Status e animação do personagem
+        is_selected = self.resource_manager.selected_character == 'player'
+        scale = 1.1 if is_selected else 1.0
+        status_text = "Selecionado" if is_selected else "Clique para selecionar"
+        status_color = GOLD if is_selected else WHITE
+        
+        status_surf = self.resource_manager.fonts[24].render(status_text, True, status_color)
         status_x = x - status_surf.get_width() // 2
         self.screen.blit(status_surf, (status_x, y + 40))
         
         player_img = self.resource_manager.images['player']
-        player_rect = player_img.get_rect(center=(x, y + 120))
-        self.screen.blit(player_img, player_rect)
+        scaled_img = pygame.transform.smoothscale(
+            player_img, 
+            (int(player_img.get_width() * scale), 
+             int(player_img.get_height() * scale))
+        )
+        
+        player_rect = scaled_img.get_rect(center=(x, y + 120))
+        self.screen.blit(scaled_img, player_rect)
+        
+        # Desenha borda ao redor do personagem selecionado
+        if is_selected:
+            pygame.draw.rect(self.screen, GOLD, player_rect.inflate(10, 10), 3, border_radius=10)
+            # Adiciona partículas de destaque
+            if random.random() < 0.1:
+                angle = random.uniform(0, math.pi * 2)
+                px = player_rect.centerx + math.cos(angle) * 40
+                py = player_rect.centery + math.sin(angle) * 40
+                self.particle_system.add_particle(px, py, GOLD, 3, 400, gravity=False)
         
         # Personagem desbloqueável
         x = WIDTH * 3 // 4
@@ -394,17 +531,20 @@ class Game:
         if is_unlocked:
             text_color = WHITE
             player_img = self.resource_manager.images['player2']
-            status_text = "Desbloqueado!"
-            status_color = GOLD
+            is_selected = self.resource_manager.selected_character == 'player2'
+            status_text = "Selecionado" if is_selected else "Clique para selecionar"
+            status_color = GOLD if is_selected else WHITE
+            scale = 1.1 if is_selected else 1.0
         else:
             text_color = DARK_PURPLE
             player_img = self.resource_manager.images['player2'].copy()
-            # Cria uma versão escurecida da imagem
             dark = pygame.Surface(player_img.get_size()).convert_alpha()
             dark.fill((0, 0, 0, 128))
             player_img.blit(dark, (0, 0))
             status_text = f"Desbloqueio: {150000:,} pontos"
             status_color = DARK_PURPLE
+            scale = 0.9
+            is_selected = False
         
         text_surf = self.resource_manager.fonts[32].render(char_text, True, text_color)
         status_surf = self.resource_manager.fonts[24].render(status_text, True, status_color)
@@ -414,14 +554,24 @@ class Game:
         self.screen.blit(text_surf, (text_x, y))
         self.screen.blit(status_surf, (status_x, y + 40))
         
-        player_rect = player_img.get_rect(center=(x, y + 120))
-        self.screen.blit(player_img, player_rect)
+        scaled_img = pygame.transform.smoothscale(
+            player_img, 
+            (int(player_img.get_width() * scale), 
+             int(player_img.get_height() * scale))
+        )
         
-        # Instrução para voltar
-        back = "Pressione ESC para voltar"
-        back_surf = self.resource_manager.fonts[24].render(back, True, WHITE)
-        x = (WIDTH - back_surf.get_width()) // 2
-        self.screen.blit(back_surf, (x, HEIGHT - 50))
+        player_rect = scaled_img.get_rect(center=(x, y + 120))
+        self.screen.blit(scaled_img, player_rect)
+        
+        # Desenha borda ao redor do personagem selecionado
+        if is_selected:
+            pygame.draw.rect(self.screen, GOLD, player_rect.inflate(10, 10), 3, border_radius=10)
+            # Adiciona partículas de destaque
+            if random.random() < 0.1:
+                angle = random.uniform(0, math.pi * 2)
+                px = player_rect.centerx + math.cos(angle) * 40
+                py = player_rect.centery + math.sin(angle) * 40
+                self.particle_system.add_particle(px, py, GOLD, 3, 400, gravity=False)
         
         # Instrução para voltar
         back = "Pressione ESC para voltar"

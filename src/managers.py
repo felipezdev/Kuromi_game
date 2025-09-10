@@ -176,6 +176,7 @@ class ResourceManager:
         self.bg_transition = 0
         self.bg_fade_speed = 0.002
         self.current_bgm = None
+        self.selected_character = 'player'  # Personagem padrão
         
         # Cria uma superfície vazia para caso uma imagem não seja encontrada
         empty_surface = pygame.Surface((20, 20))
@@ -275,7 +276,7 @@ class ResourceManager:
             print(f"Não foi possível carregar o som: {path}")
             
     def load_fonts(self):
-        sizes = [16, 24, 32, 40, 48, 64]
+        sizes = [16, 20, 24, 32, 40, 48, 64]
         try:
             for size in sizes:
                 self.fonts[size] = pygame.font.Font(FONT_PATH, size)

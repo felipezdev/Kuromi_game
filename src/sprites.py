@@ -16,9 +16,9 @@ class Player(pygame.sprite.Sprite):
         char_data = self.game.resource_manager.unlockable_characters.get('player2')
         if char_data and self.game.score_manager.highest_score >= char_data['score']:
             char_data['unlocked'] = True
-            self.image = game.resource_manager.images['player2']
-        else:
-            self.image = game.resource_manager.images['player']
+            
+        # Usa o personagem selecionado
+        self.image = game.resource_manager.images[game.resource_manager.selected_character]
             
         self.rect = self.image.get_rect()
         self.rect.centerx = WIDTH // 2

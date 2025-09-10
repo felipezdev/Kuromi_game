@@ -2,10 +2,11 @@
 Constantes e configurações para o Kuromi Catch
 """
 import os
+from datetime import datetime
 
 # --- Configurações da Janela ---
-WIDTH = 800
-HEIGHT = 600
+WIDTH = 1024
+HEIGHT = 768
 FPS = 60
 TITLE = "✨ Kuromi Catch ✨"
 
@@ -123,6 +124,55 @@ RAINBOW_COLORS = [
     (144, 238, 144),  # Light Green
 ]
 
+# --- Sistema de Objetivos Diários ---
+DAILY_OBJECTIVES = {
+    'catch_items': {'name': '🍰 Coletor de Doces', 'desc': 'Pegue {} doces', 'max': 50},
+    'reach_combo': {'name': '✨ Combo Master', 'desc': 'Alcance um combo {}x', 'max': 8},
+    'score_points': {'name': '⭐ Pontuador', 'desc': 'Faça {} pontos', 'max': 1000},
+    'survive_time': {'name': '⏰ Sobrevivente', 'desc': 'Sobreviva por {} segundos', 'max': 60},
+    'perfect_catch': {'name': '💖 Perfeição', 'desc': 'Pegue {} doces sem errar', 'max': 15}
+}
+DAILY_OBJECTIVES_REWARD = 500
+OBJECTIVES_FILE = os.path.join(SAVE_PATH, "daily_objectives.json")
+
+# --- Modos de Jogo ---
+GAME_MODES = {
+    'candy_rain': {
+        'name': '� Chuva de Doces',
+        'desc': 'Somente doces caem do céu!',
+        'long_desc': 'Uma chuva mágica faz com que apenas doces deliciosos caiam por 30 segundos! Aproveite para fazer combos incríveis!',
+        'duration': 30000,
+        'score_mult': 1.2,
+        'difficulty': 1,
+        'effects': ['Apenas itens bons', 'Duração limitada', 'Bônus de pontos: 20%']
+    },
+    'speed_rush': {
+        'name': '⚡ Corrida Veloz',
+        'desc': 'Tudo em alta velocidade!',
+        'long_desc': 'Os itens caem muito mais rápido, mas você ganha o dobro de pontos! Teste seus reflexos neste modo desafiador!',
+        'speed_mult': 1.8,
+        'score_mult': 2.0,
+        'difficulty': 2,
+        'effects': ['Velocidade aumentada em 80%', 'Pontuação dobrada', 'Dificuldade alta']
+    },
+    
+    }
+MODES_FILE = os.path.join(SAVE_PATH, "game_modes.json")
+
+# --- Efeitos Visuais ---
+SCORE_POPUP_DURATION = 1000  # Duração dos números flutuantes
+PERFECT_FLASH_DURATION = 500  # Duração do flash "PERFECT!"
+COMBO_METER_WIDTH = 200
+COMBO_METER_HEIGHT = 20
+PERSONAL_BEST_OFFSET = 50  # Distância do indicador de recorde pessoal
+
+COMBO_COLORS = {
+    3: YELLOW,
+    5: PINK,
+    7: PURPLE,
+    10: GOLD
+}
+
 # --- Estados do Jogo ---
 STATE_MENU = 'menu'
 STATE_GAME = 'game'
@@ -131,3 +181,5 @@ STATE_GAMEOVER = 'gameover'
 STATE_INSTRUCTIONS = 'instructions'
 STATE_HIGHSCORE = 'highscore'
 STATE_CHARACTERS = 'characters'
+STATE_MODES = 'modes'  # Novo estado para seleção de modo
+STATE_OBJECTIVES = 'objectives'  # Novo estado para objetivos diários
